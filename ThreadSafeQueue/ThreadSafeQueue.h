@@ -85,7 +85,6 @@ public:
 	template<typename U>
 	requires std::is_constructible_v<T, U&&>
 	bool try_push(U&& value) {
-		ThreadCounter guard{*this};
 		std::unique_lock lock(m_mutex);
 		if (m_queue.size() == m_capacity || m_is_shutdown) {
 			return false;
@@ -98,7 +97,6 @@ public:
 	// Attempt to remove an element without blocking the thread.
 	// Returns false if the queue is empty.
 	bool try_pop(T& value) {
-		ThreadCounter guard{*this};
 		std::unique_lock lock(m_mutex);
 		if (m_queue.empty()) {
 			return false;
@@ -121,21 +119,18 @@ public:
 
 	// Check if the queue has been stopped
 	[[nodiscard]] bool is_shutdown() const {
-		ThreadCounter guard{*this};
 		std::scoped_lock lock(m_mutex);
 		return m_is_shutdown;
 	}
 
 	// Current number of elements in the queue
 	[[nodiscard]] size_t size() const {
-		ThreadCounter guard{*this};
 		std::scoped_lock lock(m_mutex);
 		return m_queue.size();
 	}
 
 	// Check if the queue is empty
 	[[nodiscard]] bool empty() const {
-		ThreadCounter guard{*this};
 		std::scoped_lock lock(m_mutex);
 		return m_queue.empty();
 	}
