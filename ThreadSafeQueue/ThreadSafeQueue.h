@@ -56,6 +56,7 @@ public:
 			return false;
 		}
 		m_queue.push(std::forward<U>(value));
+		lock.unlock(); // unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
 		m_cv_not_empty.notify_one();
 		return true;
 	}
@@ -72,6 +73,7 @@ public:
 		}
 		value = std::move(m_queue.front());
 		m_queue.pop();
+		lock.unlock(); // unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
 		m_cv_not_full.notify_one();
 		return true;
 	}
@@ -111,7 +113,6 @@ public:
 
 	// Shutdown signal: unblocks all waiting threads, blocks pushing new elements
 	void shutdown() {
-		ThreadCounter guard{*this};
 		std::scoped_lock lock(m_mutex);
 		m_is_shutdown = true;
 		m_cv_not_full.notify_all();
