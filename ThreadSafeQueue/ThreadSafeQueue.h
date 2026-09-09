@@ -24,7 +24,11 @@ class ThreadSafeQueue {
 	};
 public:
 	// Constructor: sets the maximum queue capacity
-	explicit ThreadSafeQueue(size_t capacity) : m_capacity(capacity) {}
+	explicit ThreadSafeQueue(size_t capacity) : m_capacity(capacity) {
+		if (capacity == 0) {
+			throw std::invalid_argument("capacity cannot be zero");
+		}
+	}
 
 	// Destructor: automatically calls shutdown() if the queue is still active
 	~ThreadSafeQueue() {
