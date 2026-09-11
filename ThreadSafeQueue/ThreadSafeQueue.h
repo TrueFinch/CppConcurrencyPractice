@@ -14,11 +14,11 @@ class ThreadSafeQueue {
 	struct ThreadCounter {
 		const ThreadSafeQueue& q;
 		ThreadCounter(const ThreadSafeQueue& queue) : q(queue) {
-			++q.m_active_thread_counter;
+			q.m_active_thread_counter.fetch_add(1, std::memory_order_relaxed);
 		}
 		~ThreadCounter() {
-			std::lock_guard lock(q.m_mutex);
-			if (--q.m_active_thread_counter == 0) {
+			if (q.m_active_thread_counter.fetch_sub(1, std::memory_order_release) == 1) {
+				std::lock_guard lock(q.m_mutex);
 				q.m_cv_destructor.notify_all();
 			}
 		}
