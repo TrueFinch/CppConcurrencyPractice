@@ -75,10 +75,11 @@ public:
 		if (m_queue.empty()) {
 			return false;
 		}
-		value = std::move(m_queue.front());
+		auto tmpValue = std::move(m_queue.front());
 		m_queue.pop();
 		lock.unlock(); // unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
 		m_cv_not_full.notify_one();
+		value = std::move(tmpValue);
 		return true;
 	}
 
@@ -105,9 +106,11 @@ public:
 		if (m_queue.empty()) {
 			return false;
 		}
-		value = std::move(m_queue.front());
+		auto tmpValue = std::move(m_queue.front());
 		m_queue.pop();
+		lock.unlock();
 		m_cv_not_full.notify_one();
+		value = std::move(tmpValue);
 		return true;
 	}
 
