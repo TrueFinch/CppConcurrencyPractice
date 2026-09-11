@@ -7,6 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <optional>
 
 template<typename T>
 class ThreadSafeQueue {
@@ -53,14 +54,25 @@ public:
 	template<typename U>
 	requires std::is_constructible_v<T, U&&>
 	bool push(U&& value) {
+		return emplace(std::forward<U>(value));
+	}
+
+	// Emplace an element into the queue.
+	// Blocks the calling thread if the queue is full.
+	// Returns false if the queue has been stopped (shutdown).
+	template<typename... Args>
+	requires std::is_constructible_v<T, Args...>
+	bool emplace(Args&&... args) {
 		ThreadCounter guard{*this};
 		std::unique_lock lock(m_mutex);
 		m_cv_not_full.wait(lock, [this] { return m_queue.size() < m_capacity || m_is_shutdown; });
 		if (m_is_shutdown) {
 			return false;
 		}
-		m_queue.push(std::forward<U>(value));
-		lock.unlock(); // unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
+		m_queue.emplace(std::forward<Args>(args)...);
+		// unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
+		// can do that because we have ThreadCounter guarding
+		lock.unlock();
 		m_cv_not_empty.notify_one();
 		return true;
 	}
@@ -69,18 +81,31 @@ public:
 	// Blocks the calling thread if the queue is empty.
 	// Returns false if the queue is empty.
 	bool pop(T& value) {
+		auto opt = pop();
+		if (opt.has_value()) {
+			value = std::move(*opt);
+			return true;
+		}
+		return false;
+	}
+
+	// Remove an element from the queue
+	// Blocks the calling thread if the queue is empty
+	// Returns std::nullopt if the queue is empty
+	std::optional<T> pop() {
 		ThreadCounter guard{*this};
 		std::unique_lock lock(m_mutex);
 		m_cv_not_empty.wait(lock, [this] { return !m_queue.empty() || m_is_shutdown; });
 		if (m_queue.empty()) {
-			return false;
+			return std::nullopt;
 		}
-		auto tmpValue = std::move(m_queue.front());
+		std::optional<T> opt = std::move(m_queue.front());
 		m_queue.pop();
-		lock.unlock(); // unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
+		// unlock mutex before calling 'notify_one' to avoid Pessimistic wake-up
+		// can do that because we have ThreadCounter guarding
+		lock.unlock();
 		m_cv_not_full.notify_one();
-		value = std::move(tmpValue);
-		return true;
+		return opt;
 	}
 
 	// --- Non-blocking (Try) operations ---
@@ -90,11 +115,17 @@ public:
 	template<typename U>
 	requires std::is_constructible_v<T, U&&>
 	bool try_push(U&& value) {
-		std::unique_lock lock(m_mutex);
+		return try_emplace(std::forward<U>(value));
+	}
+
+	template<typename... Args>
+	requires std::is_constructible_v<T, Args...>
+	bool try_emplace(Args&&... args) {
+		std::lock_guard lock(m_mutex);
 		if (m_queue.size() == m_capacity || m_is_shutdown) {
 			return false;
 		}
-		m_queue.push(std::forward<U>(value));
+		m_queue.emplace(std::forward<Args>(args)...);
 		m_cv_not_empty.notify_one();
 		return true;
 	}
@@ -102,16 +133,25 @@ public:
 	// Attempt to remove an element without blocking the thread.
 	// Returns false if the queue is empty.
 	bool try_pop(T& value) {
-		std::unique_lock lock(m_mutex);
-		if (m_queue.empty()) {
-			return false;
+		auto opt = try_pop();
+		if (opt.has_value()) {
+			value = std::move(*opt);
+			return true;
 		}
-		auto tmpValue = std::move(m_queue.front());
+		return false;
+	}
+
+	// Attempt to remove an element without blocking the thread.
+	// Returns std::nullopt if the queue is empty.
+	std::optional<T> try_pop() {
+		std::lock_guard lock(m_mutex);
+		if (m_queue.empty()) {
+			return std::nullopt;
+		}
+		std::optional<T> opt = std::move(m_queue.front());
 		m_queue.pop();
-		lock.unlock();
 		m_cv_not_full.notify_one();
-		value = std::move(tmpValue);
-		return true;
+		return opt;
 	}
 
 	// --- State management ---
