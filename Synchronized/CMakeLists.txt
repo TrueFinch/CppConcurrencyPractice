@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Catch2 3 REQUIRED)
 add_executable(SynchronizedTests
 		Synchronized.h
-		tests.cpp)
+		base_tests.cpp)
 target_link_libraries(SynchronizedTests PRIVATE Catch2::Catch2WithMain)
 
 include(Catch)
