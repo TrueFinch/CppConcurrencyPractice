@@ -46,11 +46,32 @@ class Synchronized final {
 	requires details::is_invocable_v<TCallable, TSynchronized...>
 	friend decltype(auto) withLock(TCallable&& callable, TSynchronized&&... syncs);
 
+	template<typename TData>
+	class BaseProxy {
+	public:
+		explicit BaseProxy(std::mutex& mutex, TData& data) : m_lck(mutex), m_data(data) {}
+
+		TData* operator->() noexcept {
+			return &m_data;
+		}
+
+		const TData* operator->() const noexcept {
+			return &m_data;
+		}
+	private:
+		std::lock_guard<std::mutex> m_lck;
+		TData& m_data;
+	};
+
+	using ConstProxy = BaseProxy<const T>;
+	using Proxy = BaseProxy<T>;
+
 public:
 	using value_type = T;
 
 	template<typename... Args>
 	Synchronized(Args&&... args): m_data(std::forward<Args>(args)...) {}
+	Synchronized(T&& value) : m_data(std::forward<T>(value)) {}
 
 	Synchronized(const Synchronized&) = delete;
 	Synchronized& operator=(const Synchronized&) = delete;
@@ -66,12 +87,19 @@ public:
 		return std::invoke(std::forward<TCallable>(callable), m_data);
 	}
 
-
 	template<typename TCallable>
 		requires std::is_invocable_v<TCallable, const T&>
 	decltype(auto) withLock(TCallable&& callable) const {
 		std::lock_guard lock(m_mutex);
 		return std::invoke(std::forward<TCallable>(callable), m_data);
+	}
+
+	Proxy operator->() {
+		return Proxy(m_mutex, m_data);
+	}
+
+	ConstProxy operator->() const {
+		return ConstProxy(m_mutex, m_data);
 	}
 
 private:
