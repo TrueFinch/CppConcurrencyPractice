@@ -229,6 +229,79 @@ TEST_CASE("04. Concurrency & Multithreading correctness", "[Synchronized][concur
 				b.withLock([](const int& v) { return v; }) == 150);
 		}
 	}
+
+	SECTION("MT-04. Proxy multithread tests") {
+		struct TestStruct {
+			int data;
+		};
+		SECTION("MT-04.1. Proxy locks mutex during method call and unlocks it on destruction") {
+			Synchronized syncVal(TestStruct{.data = 42});
+			std::atomic lockObserved{false};
+			std::atomic accessedValAfterUnlock{false};
+
+			std::thread observer([&]() {
+				// 1. wait until main thread locks mutex
+				while (!syncVal.isLocked()) {
+					std::this_thread::yield();
+				}
+				// 2. set flag
+				lockObserved.store(true, std::memory_order_release);
+				while (syncVal.isLocked()) {
+					std::this_thread::yield();
+				}
+				syncVal->data = 100;
+				accessedValAfterUnlock.store(true, std::memory_order_release);
+			});
+
+			{
+				// 3. lock mutex with proxy
+				auto proxy = syncVal.operator->();
+
+				// 4. wait observer thread to see locking
+				while (!lockObserved.load(std::memory_order_acquire)) {
+					std::this_thread::yield();
+				}
+				// observer confirmed locking of syncVal
+			} // 5. close score, destroy proxy, unlock mutex
+
+			observer.join();
+			REQUIRE(accessedValAfterUnlock.load(std::memory_order_acquire));
+			REQUIRE(syncVal->data == 100);
+
+			// 6. check mutex is unlocked after all operations
+			REQUIRE_FALSE(syncVal.isLocked());
+		}
+
+		SECTION("MT-04.1. Reuse of proxy") {
+			Synchronized syncVal(TestStruct{.data = 42});
+			std::atomic observerLocked{false};
+			std::atomic syncUnlocked{false};
+			std::thread observer([&]() {
+				// wait until main thread will create proxy
+				while (!syncVal.isLocked()) {
+					std::this_thread::yield();
+				}
+				observerLocked.store(true, std::memory_order_release);
+				while (syncVal.isLocked()) {
+					std::this_thread::yield();
+				}
+				syncUnlocked.store(true, std::memory_order_release);
+			});
+			{
+				auto proxy = syncVal.operator->();
+				while (!observerLocked.load(std::memory_order_acquire)) {
+					std::this_thread::yield();
+				}
+				proxy->data = 100;
+				REQUIRE(proxy->data == 100);
+				proxy->data = 42;
+				REQUIRE(proxy->data == 42);
+				REQUIRE_FALSE(syncUnlocked.load(std::memory_order_acquire));
+			}
+			observer.join();
+			REQUIRE(syncUnlocked.load(std::memory_order_acquire));
+		}
+	}
 }
 
 TEST_CASE("05. Contract, edge cases & header self-containment", "[Synchronized][contract]") {

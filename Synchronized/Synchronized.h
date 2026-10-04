@@ -102,6 +102,11 @@ public:
 		return ConstProxy(m_mutex, m_data);
 	}
 
+	bool isLocked() const {
+		std::unique_lock lock(m_mutex, std::try_to_lock);
+		return !lock.owns_lock();
+	}
+
 private:
 	mutable std::mutex m_mutex;
 	T m_data;

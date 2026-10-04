@@ -43,6 +43,23 @@ namespace freeFunctions {
 	}
 }
 
+namespace structs {
+	struct Player {
+		std::string name{"Default"};
+		int score{0};
+
+		void addScore(int value) { score += value; }
+
+		[[nodiscard]] int getScore() const { return score; }
+	};
+
+	template<typename T>
+	concept CanAddScoreThroughArrow = requires(T& sync)
+	{
+		sync->addScore(50);
+	};
+}
+
 TEST_CASE("01. Basic operations: construction, access and constraints", "[Synchronized][basic]") {
 	SECTION("BO-01. Construction") {
 		SECTION("BO-01.1. Default construction") {
@@ -332,6 +349,37 @@ TEST_CASE("01. Basic operations: construction, access and constraints", "[Synchr
 			REQUIRE(constPoint.withLock(&Point::y) == 200);
 		}
 	}
+
+	SECTION("BO-05. Proxy locking access") {
+		using namespace structs;
+		SECTION("BO-05.1. Non-const member function and field access") {
+			Synchronized<Player> player;
+			// call modification method
+			player->addScore(50);
+			REQUIRE(player->getScore() == 50);
+			// direct access to fields with modification
+			player->name = "Alice";
+			player->score = 100;
+			REQUIRE(player->name == "Alice");
+			REQUIRE(player->getScore() == 100);
+		}
+
+		SECTION("BO-05.2. Const member function and field access") {
+			const Synchronized constPlayer(Player{"Bob", 200});
+			REQUIRE(constPlayer->getScore() == 200);
+			REQUIRE(constPlayer->name == "Bob");
+
+			STATIC_CHECK_FALSE(CanAddScoreThroughArrow<const Synchronized<Player>>);
+		}
+
+		SECTION("BO-05.3. Standard STL container usage") {
+			Synchronized<std::string> syncStr("Hello");
+			syncStr->append(", World!");
+			REQUIRE(syncStr->length() == 13);
+			REQUIRE(std::string_view(syncStr->data()) == "Hello, World!");
+			REQUIRE(!syncStr->empty());
+		}
+	}
 }
 
 TEST_CASE("02. Multi-object operations: free function withLock", "[Synchronized][multi_lock]") {
@@ -391,7 +439,7 @@ TEST_CASE("02. Multi-object operations: free function withLock", "[Synchronized]
 
 			REQUIRE(withLock([](int& a, int& b) {
 				return (a == 2 && b == 1);
-			}, second, first));
+				}, second, first));
 		}
 
 		SECTION("ML-02.2. Return value from multi-lock") {
@@ -423,13 +471,13 @@ TEST_CASE("02. Multi-object operations: free function withLock", "[Synchronized]
 			using iSync = Synchronized<int>;
 
 			STATIC_CHECK_FALSE(CanCallFreeWithLock<
-				decltype([](int&, int&, int&) {}), iSync, iSync>);
+								decltype([](int&, int&, int&) {}), iSync, iSync>);
 
 			STATIC_CHECK_FALSE(CanCallFreeWithLock<
-				decltype([](double&, double&) {}), iSync, iSync>);
+								decltype([](double&, double&) {}), iSync, iSync>);
 
 			STATIC_CHECK_FALSE(CanCallFreeWithLock<
-				decltype([](int&) {}), iSync, iSync>);
+								decltype([](int&) {}), iSync, iSync>);
 		}
 	}
 }
@@ -442,7 +490,7 @@ TEST_CASE("03. Exception safety", "[Synchronized][exceptions]") {
 			REQUIRE_THROWS(si.withLock([](int& v) {
 				v = 42;
 				throw std::runtime_error("test exception");
-			}));
+				}));
 
 			std::atomic completed{false};
 			std::thread t([&]() {
@@ -460,11 +508,11 @@ TEST_CASE("03. Exception safety", "[Synchronized][exceptions]") {
 				v.push_back(1);
 				v.push_back(2);
 				throw std::runtime_error("abort");
-			}));
+				}));
 
 			REQUIRE(sv.withLock([](const std::vector<int>& v) {
 				return v.size() == 2 && v[0] == 1 && v[1] == 2;
-			}));
+				}));
 
 			sv.withLock([](std::vector<int>& v) { v.push_back(3); });
 			REQUIRE(sv.withLock([](const std::vector<int>& v) { return v.size(); }) == 3);
@@ -480,10 +528,10 @@ TEST_CASE("03. Exception safety", "[Synchronized][exceptions]") {
 				i = 99;
 				throw std::runtime_error("multi-lock exception");
 				(void)d;
-			}, si, sd));
+				}, si, sd));
 			REQUIRE(withLock([](int& i, double& d) {
 				return i == 99 && d == 0.f;
-			}, si, sd));
+				}, si, sd));
 			std::atomic<bool> done1{false}, done2{false};
 			std::thread t1([&]() {
 				si.withLock([](int& v) { v = 1; });
@@ -506,7 +554,7 @@ TEST_CASE("03. Exception safety", "[Synchronized][exceptions]") {
 				x = 100;
 				throw std::logic_error("fail");
 				(void)y; (void)z;
-			}, a, b, c));
+				}, a, b, c));
 
 			REQUIRE(a.withLock([](const int& v) { return v; }) == 100);
 			REQUIRE(b.withLock([](const int& v) { return v; }) == 2);
