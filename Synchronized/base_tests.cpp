@@ -1,3 +1,7 @@
+//
+// Created by Vladimir Glushkov on 01.10.2026.
+//
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <string>
@@ -5,6 +9,9 @@
 #include <memory>
 #include <numeric>
 #include <utility>
+#include <atomic>
+#include <thread>
+#include <stdexcept>
 
 #include "Synchronized.h"
 
@@ -323,6 +330,190 @@ TEST_CASE("01. Basic operations: construction, access and constraints", "[Synchr
 			const ConstSyncPoint constPoint(100, 200);
 			REQUIRE(constPoint.withLock(&Point::x) == 100);
 			REQUIRE(constPoint.withLock(&Point::y) == 200);
+		}
+	}
+}
+
+TEST_CASE("02. Multi-object operations: free function withLock", "[Synchronized][multi_lock]") {
+	SECTION("ML-01. Multi-lock execution") {
+		SECTION("ML-01.1. Two objects locking and swapping") {
+			Synchronized<int> a(42), b(99);
+
+			withLock([](int& x, int& y) { std::swap(x, y); }, a, b);
+
+			REQUIRE(a.withLock([](const int& v) { return v; }) == 99);
+			REQUIRE(b.withLock([](const int& v) { return v; }) == 42);
+		}
+
+		SECTION("ML-01.2. Three or more objects (variadic parameter pack)") {
+			Synchronized<int> si(1);
+			Synchronized<double> sd(2.5);
+			Synchronized<std::string> ss("hello");
+
+			withLock([](int& i, double& d, std::string& s) {
+				i = static_cast<int>(d);
+				d += i;
+				s.append(std::to_string(i));
+			}, si, sd, ss);
+
+			REQUIRE(si.withLock([](const int& v) { return v; }) == 2);
+			REQUIRE(sd.withLock([](const double& v) { return v; }) == 4.5);
+			REQUIRE(ss.withLock([](const std::string& v) { return v; }) == "hello2");
+		}
+
+		SECTION("ML-01.3. Mixed const and non-const objects") {
+			Synchronized<int> si(10);
+			const Synchronized<double> sd(3.14);
+
+			withLock([](int& i, const double& d) {
+				i = static_cast<int>(d * 2);
+			}, si, sd);
+
+			REQUIRE(si.withLock([](const int& v) { return v; }) == 6);
+			REQUIRE(sd.withLock([](const double& v) { return v; }) == 3.14);
+		}
+
+		SECTION("ML-01.4. All const objects multi-lock") {
+			const Synchronized<int> si(42);
+			const Synchronized<std::string> ss("test");
+
+			auto result = withLock([](const int& i, const std::string& s) {
+				return i + static_cast<int>(s.size());
+			}, si, ss);
+
+			REQUIRE(result == 46);
+		}
+	}
+
+	SECTION("ML-02. Multi-lock semantics & constraints") {
+		SECTION("ML-02.1. Parameter order preservation") {
+			Synchronized<int> first(1), second(2);
+
+			REQUIRE(withLock([](int& a, int& b) {
+				return (a == 2 && b == 1);
+			}, second, first));
+		}
+
+		SECTION("ML-02.2. Return value from multi-lock") {
+			Synchronized<int> si(10);
+			Synchronized<int> sj(20);
+
+			SECTION("Return by value") {
+				auto sum = withLock([](const int& a, const int& b) -> int {
+					return a + b;
+				}, si, sj);
+				REQUIRE(sum == 30);
+			}
+
+			SECTION("Return by reference") {
+				int* ptr = nullptr;
+				auto& ref = withLock([&ptr](int& a, int& b) -> int& {
+					a += b;
+					ptr = &a;
+					return a;
+				}, si, sj);
+				REQUIRE(&ref == ptr); // ref points same object as captured pointer
+				REQUIRE(si.withLock([](const int& v) { return v; }) == 30);
+				REQUIRE(sj.withLock([](const int& v) { return v; }) == 20);
+			}
+		}
+
+		SECTION("ML-02.3. Incompatible multi-lock callable rejected") {
+			using namespace details;
+			using iSync = Synchronized<int>;
+
+			STATIC_CHECK_FALSE(CanCallFreeWithLock<
+				decltype([](int&, int&, int&) {}), iSync, iSync>);
+
+			STATIC_CHECK_FALSE(CanCallFreeWithLock<
+				decltype([](double&, double&) {}), iSync, iSync>);
+
+			STATIC_CHECK_FALSE(CanCallFreeWithLock<
+				decltype([](int&) {}), iSync, iSync>);
+		}
+	}
+}
+
+TEST_CASE("03. Exception safety", "[Synchronized][exceptions]") {
+	SECTION("EX-01. Single-object exception handling") {
+		SECTION("EX-01.1. Exception releases lock") {
+			Synchronized<int> si(0);
+
+			REQUIRE_THROWS(si.withLock([](int& v) {
+				v = 42;
+				throw std::runtime_error("test exception");
+			}));
+
+			std::atomic completed{false};
+			std::thread t([&]() {
+				si.withLock([](int& v) { v += 1; });
+				completed = true;
+			});
+			t.join();
+			REQUIRE(completed);
+		}
+
+		SECTION("EX-01.2. Object state usability after exception") {
+			Synchronized<std::vector<int>> sv;
+
+			REQUIRE_THROWS(sv.withLock([](std::vector<int>& v) {
+				v.push_back(1);
+				v.push_back(2);
+				throw std::runtime_error("abort");
+			}));
+
+			REQUIRE(sv.withLock([](const std::vector<int>& v) {
+				return v.size() == 2 && v[0] == 1 && v[1] == 2;
+			}));
+
+			sv.withLock([](std::vector<int>& v) { v.push_back(3); });
+			REQUIRE(sv.withLock([](const std::vector<int>& v) { return v.size(); }) == 3);
+		}
+	}
+
+	SECTION("EX-02. Multi-object exception handling") {
+		SECTION("EX-02.1. Exception releases all acquired locks") {
+			Synchronized<int> si(0);
+			Synchronized<double> sd(0.0);
+
+			REQUIRE_THROWS(withLock([](int& i, double& d) {
+				i = 99;
+				throw std::runtime_error("multi-lock exception");
+				(void)d;
+			}, si, sd));
+			REQUIRE(withLock([](int& i, double& d) {
+				return i == 99 && d == 0.f;
+			}, si, sd));
+			std::atomic<bool> done1{false}, done2{false};
+			std::thread t1([&]() {
+				si.withLock([](int& v) { v = 1; });
+				done1 = true;
+			});
+			std::thread t2([&]() {
+				sd.withLock([](double& v) { v = 1.0; });
+				done2 = true;
+			});
+			t1.join();
+			t2.join();
+
+			REQUIRE((done1 && done2));
+		}
+
+		SECTION("EX-02.2. All objects usable after multi-lock exception") {
+			Synchronized<int> a(1), b(2), c(3);
+
+			REQUIRE_THROWS(withLock([](int& x, int& y, int& z) {
+				x = 100;
+				throw std::logic_error("fail");
+				(void)y; (void)z;
+			}, a, b, c));
+
+			REQUIRE(a.withLock([](const int& v) { return v; }) == 100);
+			REQUIRE(b.withLock([](const int& v) { return v; }) == 2);
+			REQUIRE(c.withLock([](const int& v) { return v; }) == 3);
+
+			withLock([](int& x, int& y, int& z) { x += y + z; }, a, b, c);
+			REQUIRE(a.withLock([](const int& v) { return v; }) == 105);
 		}
 	}
 }

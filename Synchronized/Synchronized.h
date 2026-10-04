@@ -8,6 +8,7 @@
 #include <mutex>
 #include <utility>
 #include <type_traits>
+#include <cassert>
 
 template<typename T>
 class Synchronized;
@@ -78,10 +79,16 @@ private:
 	T m_data;
 };
 
-// All synchronized objects must to be distinct
+// All synchronized objects must be distinct — passing the same object twice is UB (non-recursive std::mutex)
 template<typename TCallable, typename... TSynchronized>
 	requires details::is_invocable_v<TCallable, TSynchronized...>
 decltype(auto) withLock(TCallable&& callable, TSynchronized&&... syncs) {
+	// Debug assertion: detect duplicate objects by comparing mutex addresses
+	std::array<void*, sizeof...(syncs)> addresses{&syncs.m_mutex...};
+	for (std::size_t i = 0; i < sizeof...(syncs); ++i)
+		for (std::size_t j = i + 1; j < sizeof...(syncs); ++j)
+			assert(addresses[i] != addresses[j] && "Duplicate Synchronized object passed to withLock — causes UB");
+
 	std::scoped_lock lock(syncs.m_mutex...);
 	return std::invoke(std::forward<TCallable>(callable), syncs.m_data...);
 }
