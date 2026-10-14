@@ -41,9 +41,7 @@ public:
 	};
 
 	explicit ThreadPool(unsigned thread_count = std::thread::hardware_concurrency()) {
-		auto hc = std::thread::hardware_concurrency();
-		hc = hc > 0 ? hc : 1u;
-		thread_count = std::clamp(thread_count, 1u, hc);
+		thread_count = std::max(1u, thread_count);
 		m_workers.reserve(thread_count);
 		for (auto i = 0u; i < thread_count; ++i) {
 			m_workers.emplace_back([this] {
@@ -68,7 +66,6 @@ public:
 	}
 
 	~ThreadPool() {
-		shutdown();
 		join();
 	}
 
@@ -85,10 +82,9 @@ public:
 		std::vector<Task> tasks;
 		{
 			std::scoped_lock lock(m_mutex);
-			if (m_stop_policy != eStopPolicy::None) {
+			if (m_stop_policy == eStopPolicy::Discard) {
 				return false;
 			}
-
 			m_stop_policy = eStopPolicy::Discard;
 			tasks.reserve(m_queue.size());
 			while (!m_queue.empty()) {
@@ -119,6 +115,7 @@ public:
 	}
 
 	void join() {
+		shutdown();
 		for (auto& worker: m_workers) {
 			if (worker.joinable()) {
 				worker.join();
