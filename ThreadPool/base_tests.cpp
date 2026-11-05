@@ -17,6 +17,9 @@ concept CanPushTask = requires(ThreadPool& tp, F&& f, Args&&... args)
 	tp.push(std::forward<F>(f), std::forward<Args>(args)...);
 };
 
+// TEST_CASE("Sandbox") {
+// }
+
 TEST_CASE("01. Base tests") {
 	SECTION("BT-01. Single task with return value") {
 		ThreadPool tp(1);
@@ -63,8 +66,13 @@ TEST_CASE("01. Base tests") {
 			STATIC_CHECK(CanPushTask<int(int), int>);
 			STATIC_CHECK(CanPushTask<decltype([](int){}), int>);
 			STATIC_CHECK(CanPushTask<decltype(&std::vector<int>::empty), std::vector<int>>);
+			STATIC_CHECK(CanPushTask<void(std::unique_ptr<int>), std::unique_ptr<int>>);
 			using PushBackMemPtr = void(std::vector<int>::*)(const int&);
 			STATIC_CHECK(CanPushTask<PushBackMemPtr, std::vector<int>, int>);
+			struct AnyValueCategoryCallable {
+				int operator()() const& { return 42; }
+			};
+			STATIC_CHECK(CanPushTask<AnyValueCategoryCallable>);
 		}
 		SECTION("Invalid invocable") {
 			STATIC_CHECK_FALSE(CanPushTask<void(), int>);
@@ -73,6 +81,10 @@ TEST_CASE("01. Base tests") {
 			STATIC_CHECK_FALSE(CanPushTask<decltype([](int){}), std::string>);
 			using PushBackMemPtr = void(std::vector<int>::*)(const int&);
 			STATIC_CHECK_FALSE(CanPushTask<PushBackMemPtr, std::vector<int>>);
+			struct LvalueOnlyCallable {
+				int operator()() & { return 42; }
+			};
+			STATIC_CHECK_FALSE(CanPushTask<LvalueOnlyCallable>);
 		}
 	}
 	SECTION("BT-06. More tasks than workers in pool") {
