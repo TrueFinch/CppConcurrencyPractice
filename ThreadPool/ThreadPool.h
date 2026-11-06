@@ -7,44 +7,18 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstdint>
-#include <iostream>
 #include <functional>
 #include <future>
+#include <iostream>
 #include <mutex>
 #include <optional>
 #include <queue>
-#include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 class ThreadPool final {
-	template<typename ReturnType>
-	struct CallableGuard {
-		std::promise<ReturnType> promise;
-		bool done = false;
-
-		CallableGuard() = default;
-
-		CallableGuard(CallableGuard&& other) noexcept
-			: promise(std::move(other.promise))
-			, done(std::exchange(other.done, true)) {}
-
-		CallableGuard(const CallableGuard&) = delete;
-
-		CallableGuard& operator=(const CallableGuard&) = delete;
-
-		CallableGuard& operator=(CallableGuard&&) = delete;
-
-		~CallableGuard() {
-			if (done) {
-				return;
-			}
-			promise.set_exception(std::make_exception_ptr(PoolDiscarded{}));
-		}
-	};
-
 	using Task = std::move_only_function<void()>;
 
 	std::queue<Task> m_queue;
@@ -60,10 +34,6 @@ class ThreadPool final {
 	} m_stop_policy{eStopPolicy::None};
 
 public:
-	struct PoolDiscarded: std::logic_error {
-		PoolDiscarded(): logic_error("ThreadPool: task discarded on shutdown!") {}
-	};
-
 	explicit ThreadPool(unsigned thread_count = std::thread::hardware_concurrency()) {
 		thread_count = std::max(1u, thread_count);
 		m_workers.reserve(thread_count);
@@ -93,11 +63,16 @@ public:
 
 	ThreadPool& operator=(ThreadPool&&) = delete;
 
-	// stop pushing new tasks and discard existing
-	// m_stop_policy -> Discard
+	// stop pushing new tasks and discard existing,
+	// m_stop_policy changes to `Discard`
+	// futures will get future_error with `broken_promise` code
 	bool request_stop() {
-		std::vector<Task> tasks;
 		{
+			// tasks must be declared before lock:
+			// * it must be destroyed after m_mutex is released
+			// * destroying calls external code that may re-enter pool (cause deadlock)
+			//   or run slowly
+			std::vector<Task> tasks;
 			std::scoped_lock lock(m_mutex);
 			if (m_stop_policy == eStopPolicy::Discard) {
 				return false;
@@ -115,7 +90,7 @@ public:
 	}
 
 	// stop pushing new tasks and wait for existing to complete
-	// m_stop_policy -> Drain
+	// m_stop_policy changes to `Drain`
 	bool shutdown() {
 		{
 			std::scoped_lock lock(m_mutex);
@@ -150,10 +125,12 @@ public:
 	std::optional<std::future<std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>>>
 	push(F&& f, Args&&... args) {
 		using ReturnType = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>;
-		CallableGuard<ReturnType> callable_guard;
-		auto future = callable_guard.promise.get_future();
+		std::packaged_task<ReturnType()> task([f = std::forward<F>(f), ...args = std::forward<Args>(args)]() mutable {
+			return std::invoke(std::move(f), std::move(args)...);
+		});
+		auto future = task.get_future();
 
-		if (!push_to_queue(make_task(std::move(callable_guard), std::forward<F>(f), std::forward<Args>(args)...))) {
+		if (!push_to_queue(std::move(task))) {
 			return std::nullopt;
 		}
 
@@ -161,23 +138,6 @@ public:
 	}
 
 private:
-	template<typename ReturnType, typename F, typename... Args>
-	Task make_task(CallableGuard<ReturnType>&& guard, F&& f, Args&&... args) {
-		return [guard = std::move(guard), f = std::forward<F>(f), ...args = std::forward<Args>(args)]() mutable {
-			try {
-				if constexpr (std::is_void_v<ReturnType>) {
-					std::invoke(std::move(f), std::move(args)...);
-					guard.promise.set_value();
-				} else {
-					guard.promise.set_value(std::invoke(std::move(f), std::move(args)...));
-				}
-			} catch (...) {
-				guard.promise.set_exception(std::current_exception());
-			}
-			guard.done = true;
-		};
-	}
-
 	bool push_to_queue(Task&& task) {
 		{
 			std::scoped_lock lock(m_mutex);

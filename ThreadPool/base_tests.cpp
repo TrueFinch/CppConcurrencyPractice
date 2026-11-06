@@ -8,6 +8,8 @@
 #include <set>
 #include <string>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_predicate.hpp>
 
 #include "ThreadPool.h"
 
@@ -17,8 +19,9 @@ concept CanPushTask = requires(ThreadPool& tp, F&& f, Args&&... args)
 	tp.push(std::forward<F>(f), std::forward<Args>(args)...);
 };
 
-// TEST_CASE("Sandbox") {
-// }
+const auto IsBrokenPromise = Catch::Matchers::Predicate<std::future_error>(
+	[](const std::future_error& e) { return e.code() == std::future_errc::broken_promise; },
+	"is broken_promise");
 
 TEST_CASE("01. Base tests") {
 	SECTION("BT-01. Single task with return value") {
@@ -70,7 +73,7 @@ TEST_CASE("01. Base tests") {
 			using PushBackMemPtr = void(std::vector<int>::*)(const int&);
 			STATIC_CHECK(CanPushTask<PushBackMemPtr, std::vector<int>, int>);
 			struct AnyValueCategoryCallable {
-				int operator()() const& { return 42; }
+				int operator()() const & { return 42; }
 			};
 			STATIC_CHECK(CanPushTask<AnyValueCategoryCallable>);
 		}
@@ -111,7 +114,7 @@ TEST_CASE("01. Base tests") {
 		pool.request_stop();
 		promise.set_value();
 		pool.join();
-		REQUIRE_THROWS_AS(canceledFuture.get(), ThreadPool::PoolDiscarded);
+		REQUIRE_THROWS_MATCHES(canceledFuture.get(), std::future_error, IsBrokenPromise);
 	}
 	SECTION("BT-08. shutdown stops thread pool") {
 		ThreadPool pool(std::thread::hardware_concurrency());
@@ -340,7 +343,7 @@ TEST_CASE("04. Exception safety") {
 			promise.set_value();
 		}
 		for (auto i = 0; i < task_count; ++i) {
-			REQUIRE_THROWS_AS(futures[i].get(), ThreadPool::PoolDiscarded);
+			REQUIRE_THROWS_MATCHES(futures[i].get(), std::future_error, IsBrokenPromise);
 		}
 	}
 }
