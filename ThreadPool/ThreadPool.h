@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -35,9 +36,9 @@ class ThreadPool final {
 
 public:
 	explicit ThreadPool(unsigned thread_count = std::thread::hardware_concurrency()) {
-		thread_count = std::max(1u, thread_count);
+		thread_count = std::max(1U, thread_count);
 		m_workers.reserve(thread_count);
-		for (auto i = 0u; i < thread_count; ++i) {
+		for (auto i = 0U; i < thread_count; ++i) {
 			m_workers.emplace_back([this] {
 				worker_loop();
 			});
@@ -45,12 +46,9 @@ public:
 	}
 
 	~ThreadPool() {
-		const auto self_id = std::this_thread::get_id();
-		for (auto& worker: m_workers) {
-			if (worker.get_id() == self_id) {
-				std::cerr << "Thread pool destroyed from worker thread!\n";
-				std::terminate();
-			}
+		if (is_worker_thread()) {
+			std::cerr << "Thread pool destroyed from worker thread!\n";
+			std::terminate();
 		}
 		join();
 	}
@@ -108,12 +106,18 @@ public:
 		return m_stop_policy != eStopPolicy::None;
 	}
 
+	// calling from worker threads causes throw std::system_error
 	void join() {
-		std::call_once(m_join_once, [this] {
+		if (is_worker_thread()) {
+			throw std::system_error(
+				std::make_error_code(std::errc::resource_deadlock_would_occur),
+				"ThreadPool::join called from a worker thread"
+			);
+		}
+		std::call_once(m_join_once, [&]() {
 			shutdown();
-			const auto self_id = std::this_thread::get_id();
 			for (auto& worker: m_workers) {
-				if (worker.joinable() && worker.get_id() != self_id) {
+				if (worker.joinable()) {
 					worker.join();
 				}
 			}
@@ -167,5 +171,15 @@ private:
 			}
 			task();
 		}
+	}
+
+	bool is_worker_thread() const {
+		const auto self_id = std::this_thread::get_id();
+		for (auto& worker: m_workers) {
+			if (worker.get_id() == self_id) {
+				return true;
+			}
+		}
+		return false;
 	}
 };

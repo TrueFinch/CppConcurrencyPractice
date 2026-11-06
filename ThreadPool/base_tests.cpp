@@ -3,13 +3,13 @@
 //
 
 #include <barrier>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_predicate.hpp>
 #include <iostream>
 #include <latch>
 #include <set>
 #include <string>
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
-#include <catch2/matchers/catch_matchers_predicate.hpp>
 
 #include "ThreadPool.h"
 
@@ -141,6 +141,23 @@ TEST_CASE("01. Base tests") {
 		pool.join();
 		REQUIRE(f.get() == 42);
 	}
+	SECTION("BT-10. Check if thread pool stopped") {
+		ThreadPool tp(1);
+		REQUIRE_FALSE(tp.is_stopped());
+		tp.shutdown();
+		tp.join();
+		REQUIRE(tp.is_stopped());
+	}
+	SECTION("BT-11. Try create empty pool") {
+		ThreadPool tp(0);
+		auto f = tp.push([]() {
+			return std::this_thread::get_id();
+		}).value();
+		using namespace std::chrono_literals;
+		auto status = f.wait_for(10s);
+		REQUIRE(status == std::future_status::ready);
+		tp.join();
+	}
 }
 
 TEST_CASE("02. Concurrency tests") {
@@ -214,6 +231,51 @@ TEST_CASE("02. Concurrency tests") {
 		future.wait();
 		REQUIRE(future.get() == 42);
 	}
+	SECTION("CT-05. Concurrent tasks push + shutdown") {
+		constexpr int producers_count = 4;
+		ThreadPool pool;
+		std::vector<std::jthread> producers;
+		producers.reserve(producers_count);
+		std::atomic<int> pushed{0};
+		std::atomic<int> completed{0};
+		std::latch latch(producers_count);
+		std::atomic<bool> violation_detected{false};
+		for (auto i = 0; i < producers_count; ++i) {
+			producers.emplace_back([&]() {
+				latch.arrive_and_wait();
+				while (true) {
+					const auto future_opt = pool.push([&]() {
+						completed.fetch_add(1);
+						std::this_thread::yield();
+					});
+					if (future_opt.has_value()) {
+						pushed.fetch_add(1);
+					} else {
+						auto retry_opt = pool.push([&]() {
+							std::this_thread::yield();
+						});
+						if (retry_opt.has_value()) {
+							violation_detected = true;
+						}
+						break;
+					}
+				}
+			});
+		}
+		constexpr int tasks_count = 100;
+		std::jthread killer([&]() {
+			while (pushed.load() < tasks_count) {
+				std::this_thread::yield();
+			}
+			pool.shutdown();
+		});
+		for (auto& producer: producers) {
+			producer.join();
+		}
+		pool.join();
+		REQUIRE(pushed.load() == completed.load());
+		REQUIRE_FALSE(violation_detected);
+	}
 }
 
 TEST_CASE("03. Lifecycle tests") {
@@ -238,14 +300,27 @@ TEST_CASE("03. Lifecycle tests") {
 			REQUIRE(futures[i].get() == i);
 		}
 	}
-	SECTION("LT-02. Double shutdown is safe") {
-		auto f = []() {
-			ThreadPool pool(1);
-			pool.shutdown();
-			REQUIRE_NOTHROW(pool.shutdown());
-		};
-		// check destruction of pool will not throw
-		REQUIRE_NOTHROW(f());
+	SECTION("LT-02. Double shutdown/request_stop is safe") {
+		SECTION("shutdown") {
+			auto f = []() {
+				ThreadPool pool(1);
+				REQUIRE(pool.shutdown());
+				REQUIRE_NOTHROW(pool.shutdown());
+				REQUIRE_FALSE(pool.shutdown());
+			};
+			// check destruction of pool will not throw
+			REQUIRE_NOTHROW(f());
+		}
+		SECTION("request_stop") {
+			auto f = []() {
+				ThreadPool pool(1);
+				REQUIRE(pool.request_stop());
+				REQUIRE_NOTHROW(pool.request_stop());
+				REQUIRE_FALSE(pool.request_stop());
+			};
+			// check destruction of pool will not throw
+			REQUIRE_NOTHROW(f());
+		}
 	}
 	SECTION("LT-03. request_stop after shutdown discards non-started tasks") {
 		constexpr unsigned task_count = 42;
@@ -314,6 +389,52 @@ TEST_CASE("03. Lifecycle tests") {
 				REQUIRE_FALSE(future_opt.has_value());
 			}
 		}
+	}
+	SECTION("LT-05. Call join from task is forbidden") {
+		ThreadPool pool(1);
+		auto future = pool.push([&]() {
+				pool.join();
+		}).value();
+		future.wait();
+		REQUIRE(pool.push([]() {}).has_value());
+		pool.join();
+		REQUIRE_THROWS_AS(future.get(), std::system_error);
+	}
+	SECTION("LT-06. Destruction of task does not cause deadlock") {
+		constexpr int thread_count = 1;
+		ThreadPool pool(thread_count);
+		std::promise<void> promise;
+		pool.push([f = promise.get_future()]() {
+			f.wait();
+		});
+		struct PoolUser {
+			ThreadPool* pool{nullptr};
+			bool* is_stopped{nullptr};
+
+			PoolUser(ThreadPool* pool, bool* is_stopped): pool{pool}, is_stopped{is_stopped} {}
+
+			~PoolUser() {
+				if (pool != nullptr) {
+					*is_stopped = pool->is_stopped();
+				}
+			}
+
+			PoolUser(const PoolUser&) = delete;
+
+			PoolUser(PoolUser&& other) noexcept
+				: pool{std::exchange(other.pool, nullptr)}
+				, is_stopped{other.is_stopped} {}
+
+			PoolUser& operator=(const PoolUser&) = delete;
+
+			PoolUser& operator=(PoolUser&&) = delete;
+		};
+		bool is_stopped{false};
+		pool.push([pu = PoolUser{&pool, &is_stopped}]() -> void {}).value();
+		pool.request_stop();
+		promise.set_value();
+		pool.join();
+		REQUIRE(is_stopped);
 	}
 }
 
