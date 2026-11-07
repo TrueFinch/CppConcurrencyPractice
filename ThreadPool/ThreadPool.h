@@ -34,6 +34,8 @@ class ThreadPool final {
 		Discard,
 	} m_stop_policy{eStopPolicy::None};
 
+	static inline thread_local const ThreadPool* tls_current_pool = nullptr;
+
 public:
 	explicit ThreadPool(unsigned thread_count = std::thread::hardware_concurrency()) {
 		thread_count = std::max(1U, thread_count);
@@ -50,7 +52,7 @@ public:
 			std::cerr << "Thread pool destroyed from worker thread!\n";
 			std::terminate();
 		}
-		join();
+		join_internal();
 	}
 
 	ThreadPool(const ThreadPool&) = delete;
@@ -114,14 +116,7 @@ public:
 				"ThreadPool::join called from a worker thread"
 			);
 		}
-		std::call_once(m_join_once, [&]() {
-			shutdown();
-			for (auto& worker: m_workers) {
-				if (worker.joinable()) {
-					worker.join();
-				}
-			}
-		});
+		join_internal();
 	}
 
 	template<typename F, typename... Args>
@@ -142,6 +137,17 @@ public:
 	}
 
 private:
+	void join_internal() {
+		std::call_once(m_join_once, [&]() {
+			shutdown();
+			for (auto& worker: m_workers) {
+				if (worker.joinable()) {
+					worker.join();
+				}
+			}
+		});
+	}
+
 	bool push_to_queue(Task&& task) {
 		{
 			std::scoped_lock lock(m_mutex);
@@ -155,6 +161,7 @@ private:
 	}
 
 	void worker_loop() {
+		tls_current_pool = this;
 		while (true) {
 			Task task;
 			{
@@ -174,12 +181,6 @@ private:
 	}
 
 	bool is_worker_thread() const {
-		const auto self_id = std::this_thread::get_id();
-		for (auto& worker: m_workers) {
-			if (worker.get_id() == self_id) {
-				return true;
-			}
-		}
-		return false;
+		return tls_current_pool == this;
 	}
 };

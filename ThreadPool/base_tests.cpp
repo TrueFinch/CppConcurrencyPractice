@@ -23,6 +23,10 @@ const auto IsBrokenPromise = Catch::Matchers::Predicate<std::future_error>(
 	[](const std::future_error& e) { return e.code() == std::future_errc::broken_promise; },
 	"is broken_promise");
 
+const auto IsDeadlock = Catch::Matchers::Predicate<std::system_error>(
+	[](const std::system_error& e) { return e.code() == std::errc::resource_deadlock_would_occur; },
+	"is deadlock");
+
 TEST_CASE("01. Base tests") {
 	SECTION("BT-01. Single task with return value") {
 		ThreadPool tp(1);
@@ -157,6 +161,26 @@ TEST_CASE("01. Base tests") {
 		auto status = f.wait_for(10s);
 		REQUIRE(status == std::future_status::ready);
 		tp.join();
+	}
+
+	SECTION("BT-12. join from worker thread is restricted") {
+		constexpr int tasks_count = 10;
+		ThreadPool pool(tasks_count);
+		std::latch latch(tasks_count);
+		std::vector<std::future<void>> futures;
+		futures.reserve(tasks_count);
+		for (auto i = 0; i < tasks_count; ++i) {
+			futures.emplace_back(pool.push([&]() {
+				latch.arrive_and_wait();
+				using namespace std::chrono_literals;
+				std::this_thread::sleep_for(1s);
+				pool.join();
+			}).value());
+		}
+		pool.join();
+		for (auto& future: futures) {
+			REQUIRE_THROWS_MATCHES(future.get(), std::system_error, IsDeadlock);
+		}
 	}
 }
 
@@ -393,7 +417,7 @@ TEST_CASE("03. Lifecycle tests") {
 	SECTION("LT-05. Call join from task is forbidden") {
 		ThreadPool pool(1);
 		auto future = pool.push([&]() {
-				pool.join();
+			pool.join();
 		}).value();
 		future.wait();
 		REQUIRE(pool.push([]() {}).has_value());
