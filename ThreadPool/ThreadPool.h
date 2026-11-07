@@ -40,10 +40,15 @@ public:
 	explicit ThreadPool(unsigned thread_count = std::thread::hardware_concurrency()) {
 		thread_count = std::max(1U, thread_count);
 		m_workers.reserve(thread_count);
-		for (auto i = 0U; i < thread_count; ++i) {
-			m_workers.emplace_back([this] {
-				worker_loop();
-			});
+		try {
+			for (auto i = 0U; i < thread_count; ++i) {
+				m_workers.emplace_back([this] {
+					worker_loop();
+				});
+			}
+		} catch (...) {
+			shutdown();
+			throw;
 		}
 	}
 
