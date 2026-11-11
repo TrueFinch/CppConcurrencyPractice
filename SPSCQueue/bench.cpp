@@ -16,8 +16,16 @@
 #include <thread>
 
 #include "SpscQueue.h"
+#include "stages/SpscQueueStage1.h"
+
+// Optional local-only baseline: the benchmark builds without it.
+#if __has_include("BlackBoxSpscQueue.h")
+#include "BlackBoxSpscQueue.h"
+#define HAVE_SPSC_PTR_QUEUE 1
+#endif
 
 namespace {
+
 	// Baseline: the same ring buffer, but guarded by a std::mutex.
 	template<typename T, std::size_t Capacity>
 	class MutexRingQueue {
@@ -83,7 +91,11 @@ int main() {
 	for (int rep = 0; rep < 3; ++rep) {
 		std::printf("Run #%d\n", rep + 1);
 		run<MutexRingQueue<std::uint64_t, Cap>>("MutexRingQueue", N);
-		run<SpscQueue<std::uint64_t, Cap>>("SpscQueue", N);
+		run<SpscQueueStage1<std::uint64_t, Cap>>("SpscQueueStage1", N);
+		run<SpscQueue<std::uint64_t, Cap>>("SpscQueue (current)", N);
+#ifdef HAVE_SPSC_PTR_QUEUE
+		run<BlackBoxSpscPtrAdapter<Cap>>("blackbox_spsc_queue", N);
+#endif
 		std::printf("\n");
 	}
 }
