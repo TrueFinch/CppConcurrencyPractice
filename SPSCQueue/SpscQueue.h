@@ -16,8 +16,9 @@
 
 // Single-Producer Single-Consumer lock-free bounded queue.
 // Task and stages — in README.md.
-template<typename T, std::size_t Capacity>
-class SpscQueue final { // NOLINT(*-pro-type-member-init)
+// default kCacheLineSize=64, measured also 128, no differences found
+template<typename T, std::size_t Capacity, std::size_t kCacheLineSize = 64>
+class SpscQueue { // NOLINT(*-pro-type-member-init)
 	// Suppressed m_data init warning because
 	// T constructs with construct_at, raw bytes never accessed directly
 
@@ -32,8 +33,8 @@ public:
 	~SpscQueue() {
 		// The producer and consumer threads have already finished at this point.
 		// Joining them establishes happens-before, so relaxed loads see the latest values.
-		const size_t front = m_front.load(std::memory_order_relaxed);
-		const size_t back = m_back.load(std::memory_order_relaxed);
+		const std::size_t front = m_front.load(std::memory_order_relaxed);
+		const std::size_t back = m_back.load(std::memory_order_relaxed);
 		for (auto i = front; i != back; ++i) {
 			std::destroy_at(slot(i));
 		}
@@ -63,9 +64,9 @@ public:
 		// acquire: pairs with the release store of m_front in tryPop().
 		// If we observe the consumer's new front and back - front < Capacity, then the
 		// destruction of the element in this slot is complete and it is safe to write to it.
-		const size_t front = m_front.load(std::memory_order_acquire);
+		const std::size_t front = m_front.load(std::memory_order_acquire);
 		// Our own index can be loaded relaxed: it is written only by this (producer) thread.
-		const size_t back = m_back.load(std::memory_order_relaxed);
+		const std::size_t back = m_back.load(std::memory_order_relaxed);
 		if (back - front == Capacity) {
 			return false;
 		}
@@ -82,11 +83,11 @@ public:
 
 	std::optional<T> tryPop() {
 		// Our own index can be loaded relaxed: it is written only by this (consumer) thread.
-		const size_t front = m_front.load(std::memory_order_relaxed);
+		const std::size_t front = m_front.load(std::memory_order_relaxed);
 		// acquire: pairs with the release store of m_back in tryEmplace().
 		// If we observe the producer's new back and back > front, then the construction
 		// of the element in this slot is complete and it is safe to read it.
-		const size_t back = m_back.load(std::memory_order_acquire);
+		const std::size_t back = m_back.load(std::memory_order_acquire);
 		if (back == front) {
 			return std::nullopt;
 		}
@@ -132,10 +133,9 @@ private:
 	T* slot(std::size_t index) {
 		return std::launder(reinterpret_cast<T*>(m_data[index & (Capacity - 1)]));
 	}
-
 	// front element of the queue
-	std::atomic<size_t> m_front{0};
+	alignas(kCacheLineSize) std::atomic<std::size_t> m_front{0};
 	// next free index in array
-	std::atomic<size_t> m_back{0};
-	alignas(T) std::byte m_data[Capacity][sizeof(T)];
+	alignas(kCacheLineSize) std::atomic<std::size_t> m_back{0};
+	alignas(kCacheLineSize) alignas(T) std::byte m_data[Capacity][sizeof(T)];
 };
