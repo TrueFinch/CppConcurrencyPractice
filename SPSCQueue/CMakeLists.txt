@@ -18,5 +18,6 @@ catch_discover_tests(SpscQueueTests)
 add_executable(SpscQueueBench
 	SpscQueue.h
 	stages/SpscQueueStage1.h
+	stages/SpscQueueStage2.h
 	bench.cpp
 )

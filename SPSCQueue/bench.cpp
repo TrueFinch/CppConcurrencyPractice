@@ -17,6 +17,7 @@
 
 #include "SpscQueue.h"
 #include "stages/SpscQueueStage1.h"
+#include "stages/SpscQueueStage2.h"
 
 // Optional local-only baseline: the benchmark builds without it.
 #if __has_include("BlackBoxSpscQueue.h")
@@ -92,6 +93,7 @@ int main() {
 		std::printf("Run #%d\n", rep + 1);
 		run<MutexRingQueue<std::uint64_t, Cap>>("MutexRingQueue", N);
 		run<SpscQueueStage1<std::uint64_t, Cap>>("SpscQueueStage1", N);
+		run<SpscQueueStage2<std::uint64_t, Cap>>("SpscQueueStage2", N);
 		run<SpscQueue<std::uint64_t, Cap>>("SpscQueue (current)", N);
 #ifdef HAVE_SPSC_PTR_QUEUE
 		run<BlackBoxSpscPtrAdapter<Cap>>("blackbox_spsc_queue", N);
