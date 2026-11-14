@@ -18,10 +18,7 @@
 // Task and stages — in README.md.
 // default kCacheLineSize=64, measured also 128, no differences found
 template<typename T, std::size_t Capacity, std::size_t kCacheLineSize = 64>
-class SpscQueue { // NOLINT(*-pro-type-member-init)
-	// Suppressed m_data init warning because
-	// T constructs with construct_at, raw bytes never accessed directly
-
+class SpscQueue {
 	static_assert(Capacity > 0 && (Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
 
 public:
@@ -61,14 +58,20 @@ public:
 	template<typename... Args>
 		requires std::is_constructible_v<T, Args...>
 	bool tryEmplace(Args&&... args) {
-		// acquire: pairs with the release store of m_front in tryPop().
-		// If we observe the consumer's new front and back - front < Capacity, then the
-		// destruction of the element in this slot is complete and it is safe to write to it.
-		const std::size_t front = m_front.load(std::memory_order_acquire);
 		// Our own index can be loaded relaxed: it is written only by this (producer) thread.
 		const std::size_t back = m_back.load(std::memory_order_relaxed);
-		if (back - front == Capacity) {
-			return false;
+		// m_front_cached always less or equal to m_front, check size with cached value
+		// move inside only if we need update cached value
+		if (back - m_front_cached == Capacity) {
+			// acquire: pairs with the release store of m_front in tryPop().
+			// If we observe the consumer's new front and back - front < Capacity, then the
+			// destruction of the element in this slot is complete and it is safe to write to it.
+			const std::size_t front = m_front.load(std::memory_order_acquire);
+			// update cached front index with m_front value
+			m_front_cached = front;
+			if (back - m_front_cached == Capacity) {
+				return false;
+			}
 		}
 		std::construct_at(slot(back), std::forward<Args>(args)...);
 
@@ -84,12 +87,18 @@ public:
 	std::optional<T> tryPop() {
 		// Our own index can be loaded relaxed: it is written only by this (consumer) thread.
 		const std::size_t front = m_front.load(std::memory_order_relaxed);
-		// acquire: pairs with the release store of m_back in tryEmplace().
-		// If we observe the producer's new back and back > front, then the construction
-		// of the element in this slot is complete and it is safe to read it.
-		const std::size_t back = m_back.load(std::memory_order_acquire);
-		if (back == front) {
-			return std::nullopt;
+		// m_back_cached always less or equal to m_back, check size with cached value
+		// move inside only if we need update cached value
+		if (m_back_cached == front) {
+			// acquire: pairs with the release store of m_back in tryEmplace().
+			// If we observe the producer's new back and back > front, then the construction
+			// of the element in this slot is complete and it is safe to read it.
+			const auto back = m_back.load(std::memory_order_acquire);
+			// update cached back index with m_back value
+			m_back_cached = back;
+			if (m_back_cached == front) {
+				return std::nullopt;
+			}
 		}
 		auto* ptr = slot(front);
 		std::optional<T> value = std::move(*ptr);
@@ -133,9 +142,12 @@ private:
 	T* slot(std::size_t index) {
 		return std::launder(reinterpret_cast<T*>(m_data[index & (Capacity - 1)]));
 	}
+
 	// front element of the queue
 	alignas(kCacheLineSize) std::atomic<std::size_t> m_front{0};
+	std::size_t m_back_cached{0};
 	// next free index in array
 	alignas(kCacheLineSize) std::atomic<std::size_t> m_back{0};
-	alignas(kCacheLineSize) alignas(T) std::byte m_data[Capacity][sizeof(T)];
+	std::size_t m_front_cached{0};
+	alignas(kCacheLineSize) alignas(T) std::byte m_data[Capacity][sizeof(T)]{};
 };
