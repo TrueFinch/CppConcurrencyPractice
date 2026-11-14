@@ -20,5 +20,6 @@ add_executable(SpscQueueBench
 	stages/SpscQueueStage1.h
 	stages/SpscQueueStage2.h
 	stages/SpscQueueStage3.h
+	stages/SpscQueueStage4.h
 	bench.cpp
 )
