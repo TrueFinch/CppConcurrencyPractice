@@ -137,10 +137,10 @@ namespace {
 	template<typename Queue>
 	void run(const char* name, std::uint64_t n) {
 		auto q = std::make_unique<Queue>();
-		std::uint64_t checksum = 0;
 
 		const auto start = std::chrono::steady_clock::now();
-		std::thread consumer([&] {
+		auto consumer = std::async(std::launch::async, [n, q = q.get()]() {
+			std::uint64_t checksum = 0;
 			const ScopedCpuPin pin(g_consumerCpu);
 			for (std::uint64_t i = 0; i < n; ++i) {
 				std::optional<std::uint64_t> v;
@@ -150,13 +150,16 @@ namespace {
 				}
 				checksum += *v;
 			}
+			return checksum;
 		});
 		for (std::uint64_t i = 0; i < n; ++i) {
 			while (!q->tryPush(i)) {
 				cpuRelax();
 			}
 		}
-		consumer.join();
+
+		// wait for the result, establishes happens-before
+		std::uint64_t checksum = consumer.get();
 		const auto elapsed = std::chrono::steady_clock::now() - start;
 
 		const double ns = std::chrono::duration<double, std::nano>(elapsed).count();
