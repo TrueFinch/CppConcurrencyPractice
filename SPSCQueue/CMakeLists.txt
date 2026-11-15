@@ -22,4 +22,13 @@ add_executable(SpscQueueBench
 	stages/SpscQueueStage3.h
 	stages/SpscQueueStage4.h
 	bench.cpp
+	FFSpscQueue.h
 )
+
+add_executable(FFSpscQueueTests
+	FFSpscQueue.h
+	ff_base_tests.cpp
+	ff_concurrency_tests.cpp
+)
+target_link_libraries(FFSpscQueueTests PRIVATE Catch2::Catch2WithMain)
+catch_discover_tests(FFSpscQueueTests)

@@ -32,6 +32,7 @@
 
 #include <future>
 
+#include "FFSpscQueue.h"
 #include "SpscQueue.h"
 #include "stages/SpscQueueStage1.h"
 #include "stages/SpscQueueStage2.h"
@@ -194,6 +195,7 @@ int main(int argc, char** argv) {
 		run<SpscQueueStage3<std::uint64_t, Cap>>("SpscQueueStage3", N);
 		run<SpscQueueStage4<std::uint64_t, Cap>>("SpscQueueStage4", N);
 		run<SpscQueue<std::uint64_t, Cap>>("SpscQueue (current)", N);
+		run<FFSpscQueue<std::uint64_t, Cap>>("Fast Forward SpscQueue", N);
 #ifdef HAVE_SPSC_PTR_QUEUE
 		run<BlackBoxSpscPtrAdapter<Cap>>("blackbox_spsc_queue", N);
 #endif
