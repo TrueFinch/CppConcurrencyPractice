@@ -29,6 +29,7 @@ add_executable(FFSpscQueueTests
 	FFSpscQueue.h
 	ff_base_tests.cpp
 	ff_concurrency_tests.cpp
+	ff_ptr_tests.cpp
 )
 target_link_libraries(FFSpscQueueTests PRIVATE Catch2::Catch2WithMain)
 catch_discover_tests(FFSpscQueueTests)

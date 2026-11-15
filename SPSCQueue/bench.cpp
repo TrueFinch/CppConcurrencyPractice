@@ -108,6 +108,27 @@ namespace {
 		bool m_pinned = false;
 	};
 
+	// Adapts FFPtrSpscQueue (stores `const T*`, nullptr = empty slot) to the tryPush/tryPop
+	// interface used by run(). Like the blackbox adapter, each value is encoded into the pointer
+	// itself as (value + 1), so it is never nullptr. The pointers are never dereferenced, so this
+	// measures only the queue, without the cache miss a real consumer pays to read *ptr.
+	template<std::size_t Capacity>
+	class FFPtrSpscQueueAdapter {
+	public:
+		bool tryPush(std::uint64_t v) {
+			return m_queue.tryPush(reinterpret_cast<const std::uint64_t*>(static_cast<std::uintptr_t>(v + 1)));
+		}
+
+		std::optional<std::uint64_t> tryPop() {
+			const std::uint64_t* p = m_queue.tryPop();
+			if (p == nullptr) return std::nullopt;
+			return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(p)) - 1;
+		}
+
+	private:
+		FFPtrSpscQueue<std::uint64_t, Capacity> m_queue;
+	};
+
 	// Baseline: the same ring buffer, but guarded by a std::mutex.
 	template<typename T, std::size_t Capacity>
 	class MutexRingQueue {
@@ -196,6 +217,7 @@ int main(int argc, char** argv) {
 		run<SpscQueueStage4<std::uint64_t, Cap>>("SpscQueueStage4", N);
 		run<SpscQueue<std::uint64_t, Cap>>("SpscQueue (current)", N);
 		run<FFSpscQueue<std::uint64_t, Cap>>("Fast Forward SpscQueue", N);
+		run<FFPtrSpscQueueAdapter<Cap>>("Fast Forward Ptr SpscQueue", N);
 #ifdef HAVE_SPSC_PTR_QUEUE
 		run<BlackBoxSpscPtrAdapter<Cap>>("blackbox_spsc_queue", N);
 #endif
